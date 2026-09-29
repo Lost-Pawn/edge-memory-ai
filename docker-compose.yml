@@ -1,0 +1,54 @@
+# Full-stack deployment: Qdrant Server (cloud brain storage) + cloud sync service +
+# two edge devices + the React dashboard.
+#
+# Before `up`, download models ONCE into the ./models volume (explicit, never automatic):
+#   docker compose run --rm edge-a edge-memory download-models
+#   docker compose run --rm edge-a edge-memory download-llm
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports: ["6333:6333", "6334:6334"]
+    volumes: ["./data/qdrant:/qdrant/storage"]
+
+  cloud:
+    image: edgememory-backend:latest
+    build: { context: ., dockerfile: deploy/Dockerfile.backend }
+    command: uvicorn cloud_sync.api.app:app --host 0.0.0.0 --port 8000
+    environment:
+      CLOUD_QDRANT_URL: http://qdrant:6333
+      EDGE_MODELS_DIR: /models
+      EDGE_LOCAL_FILES_ONLY: "true"
+    ports: ["8000:8000"]
+    volumes: ["./models:/models", "./data/cloud:/data", "./src:/app/src"]
+    depends_on: [qdrant]
+
+  edge-a:
+    image: edgememory-backend:latest
+    command: uvicorn edge_memory.api.app:app --host 0.0.0.0 --port 8001
+    environment:
+      EDGE_DEVICE_ID: edge-A
+      EDGE_DATA_DIR: /data/edge-A
+      EDGE_MODELS_DIR: /models
+      EDGE_CLOUD_URL: http://cloud:8000
+      EDGE_LLM_MODEL_PATH: /models/llm/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+    ports: ["8001:8001"]
+    volumes: ["./models:/models", "./data:/data", "./src:/app/src"]
+    depends_on: [cloud]
+
+  edge-b:
+    image: edgememory-backend:latest
+    command: uvicorn edge_memory.api.app:app --host 0.0.0.0 --port 8001
+    environment:
+      EDGE_DEVICE_ID: edge-B
+      EDGE_DATA_DIR: /data/edge-B
+      EDGE_MODELS_DIR: /models
+      EDGE_CLOUD_URL: http://cloud:8000
+      EDGE_LLM_MODEL_PATH: /models/llm/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+    ports: ["8002:8001"]
+    volumes: ["./models:/models", "./data:/data", "./src:/app/src"]
+    depends_on: [cloud]
+
+  frontend:
+    build: { context: ., dockerfile: deploy/Dockerfile.frontend }
+    ports: ["5173:5173"]
+    depends_on: [edge-a, edge-b]
